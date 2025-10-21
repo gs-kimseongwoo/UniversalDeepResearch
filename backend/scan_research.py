@@ -37,6 +37,7 @@ from clients import (
     is_output_positive,
 )
 from config import get_config
+import json
 from sessions import generate_session_key
 
 # Get configuration
@@ -386,22 +387,58 @@ def check_if_prompt_is_valid(client: OpenAI, prompt: str) -> bool:
 
 
 def perform_prompt_decomposition(client: OpenAI, prompt: str) -> List[str]:
+    """Decomposes the prompt into a task and format using a structured JSON output."""
+
+    # 1. more specific prompt to give AI.
+    system_prompt = """
+You are an expert assistant that decomposes a user's research prompt into two specific parts: a 'task' and a 'format'.
+Your response MUST be ONLY a single, valid JSON object. Do not add any text before or after the JSON.
+The JSON object must contain exactly two keys: "task" and "format".
+"""
+
+    user_prompt = f"""
+Decompose the following PROMPT.
+
+**Example Input:**
+PROMPT: "Write a short story about a robot who learns to paint, in the style of Edgar Allan Poe."
+
+**Example JSON Output:**
+{{
+  "task": "Write a short story about a robot who learns to paint.",
+  "format": "The story should be in the style of Edgar Allan Poe."
+}}
+
+---
+
+**Now, decompose this PROMPT:**
+PROMPT: "{prompt}"
+
+**Your JSON Output:**
+"""
+
     messages = [
-        {
-            "role": "system",
-            "content": "You are a helpful assistant that decomposes a prompt into a task to be performed and a format in which the report should be produced. The output should be two prompts separated by a double-newline. The first prompt is the task to be performed, and the second prompt is the format in which the report should be produced. If there is no formatting constraint, output 'No formatting constraint' in the second prompt. Do not output any other text.",
-        },
-        {
-            "role": "user",
-            "content": f"Decompose the PROMPT into a task to be performed and a format in which the report should be produced. If there is no formatting constraint, output 'No formatting constraint' in the second prompt. Do not output any other text.\n\nEXAMPLE PROMPT:\nWrite a three-chapter report on the differences between the US and European economy health in 2024. The first chapter should be about the US economy health, the second chapter should be about the European economy health, and the third chapter should be about the differences between the two.\n\nEXAMPLE OUTPUT:\nWrite a report on the differences between the US and European economy health in 2024.\n\nThe report should be in the form of a three-chapter report. The first chapter should be about the US economy health, the second chapter should be about the European economy health, and the third chapter should be about the differences between the two.\n\nPROMPT: {prompt}\n\nReminders: The output should be two prompts separated by a double-newline. The first prompt is the task to be performed, and the second prompt is the format in which the report should be produced. If there is no formatting constraint, output 'No formatting constraint' in the second prompt. Do not output any other text.",
-        },
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
     ]
-    decomposition = get_completion(client, messages).split("\n\n")
-    if len(decomposition) != 2:
+
+    # 2. get response from AI.
+    response_text = get_completion(client, messages)
+
+    try:
+        # 3. interpret as Json. (Instead of split())
+        data = json.loads(response_text)
+
+        # 4. check both task and format is in JSON.
+        if "task" not in data or "format" not in data:
+            raise ValueError(f"JSON response is missing 'task' or 'format' key. Response: {response_text}")
+
+        # 5. if success, return list
+        return [data["task"], data["format"]]
+
+    except json.JSONDecodeError:
+        # 6.if it is not json, send error clearly
         raise ValueError(
-            f"Failed to perform prompt decomposition; decomposition: {decomposition}"
-        )
-    return decomposition
+            f"Failed to decode AI response as JSON. The model did not respond in the correct format. Response was: {response_text}")
 
 
 def generate_topics(client: OpenAI, prompt: str) -> List[str]:
